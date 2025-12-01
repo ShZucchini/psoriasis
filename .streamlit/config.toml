@@ -1,0 +1,6 @@
+[theme]
+primaryColor = "#A65D5D"           # The Terracotta/Reddish-Brown button color
+backgroundColor = "#FFFFFF"        # White main background
+secondaryBackgroundColor = "#380E13" # Deep Maroon (Sidebar background)
+textColor = "#380E13"              # Dark text for main area
+font = "sans serif"
