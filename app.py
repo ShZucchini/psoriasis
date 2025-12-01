@@ -169,6 +169,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
 # --- REAL ALGORITHM IMPLEMENTATIONS (STRICT ADHERENCE TO THESIS) ---
 
 class CSIFT_Algorithms:
@@ -330,6 +331,62 @@ def run_enhanced_csift(image):
     exec_time = (time.time() - start_time) * 1000 
     return keypoints, enhanced_descriptors, exec_time
 
+# --- HELPER: REAL METRICS CALCULATION ---
+def calculate_real_metrics_live(image, kp1, desc1, detector_func):
+    """
+    Runs a live validation test on the single uploaded image 
+    by rotating it 15 degrees and checking if features survive.
+    """
+    # Safety check
+    if desc1 is None or len(kp1) < 2: 
+        return 0.0, 0.0
+
+    # 1. Synthetic Rotation (15 degrees)
+    h, w = image.shape[:2]
+    center = (w // 2, h // 2)
+    M = cv2.getRotationMatrix2D(center, 15, 1.0)
+    rotated_img = cv2.warpAffine(image, M, (w, h))
+
+    # 2. Run the SAME detector on the rotated image
+    kp2, desc2, _ = detector_func(rotated_img)
+    
+    if desc2 is None or len(kp2) < 2: 
+        return 0.0, 0.0
+
+    # 3. Calculate Repeatability (Geometric Check)
+    # We project points from Original -> Rotated and see if they land near a new keypoint
+    pts1 = np.float32([kp.pt for kp in kp1]).reshape(-1, 1, 2)
+    pts2 = np.array([kp.pt for kp in kp2])
+    
+    # Transform original points using the rotation matrix
+    pts1_proj = cv2.transform(pts1, M)
+    
+    correct_repeats = 0
+    threshold = 3.0 # pixels
+    
+    # Check if projected points are close to any point in the second set
+    for pt in pts1_proj:
+        x, y = pt[0]
+        # Ignore points that rotated out of view
+        if 0 <= x < w and 0 <= y < h:
+            # Distance to nearest neighbor
+            dist = np.linalg.norm(pts2 - np.array([x, y]), axis=1)
+            if np.min(dist) < threshold: 
+                correct_repeats += 1
+            
+    rep_rate = (correct_repeats / len(kp1)) * 100
+
+    # 4. Calculate Matching Score (Descriptor Check)
+    # How many descriptors match correctly despite rotation?
+    bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
+    try:
+        matches = bf.match(desc1, desc2)
+        match_score = (len(matches) / len(kp1)) * 100
+    except:
+        match_score = 0.0
+    
+    return rep_rate, match_score
+
 # --- UI LOGIC ---
 
 with st.sidebar:
@@ -424,17 +481,16 @@ else:
             kp_enh, desc_enh, time_enh = run_enhanced_csift(image)
             img_enh_viz = cv2.drawKeypoints(image, kp_enh, None, color=(50, 205, 50), flags=0)
 
-        # METRIC CALCULATIONS
+        # --- REAL METRIC CALCULATIONS ---
         dens_std = len(kp_std)
         dens_enh = len(kp_enh)
         
-        # Simulation of Repeatability (Driven by thesis theory & batch results)
-        rep_rate_std = 61.6  # From batch average
-        rep_rate_enh = 33.1  # From batch average
+        # Calculate REAL Repeatability & Matching for Standard Algo
+        # We pass 'run_standard_csift' so the helper knows which algorithm to re-test
+        rep_rate_std, match_score_std = calculate_real_metrics_live(image, kp_std, desc_std, run_standard_csift)
         
-        # Distinctiveness Variance (From actual current image run)
-        match_score_std = np.var(desc_std) if desc_std is not None else 0
-        match_score_enh = np.var(desc_enh) if desc_enh is not None else 0
+        # Calculate REAL Repeatability & Matching for Enhanced Algo
+        rep_rate_enh, match_score_enh = calculate_real_metrics_live(image, kp_enh, desc_enh, run_enhanced_csift)
         
         st.markdown("---")
         res_col1, res_col2 = st.columns(2, gap="large")
@@ -453,8 +509,8 @@ else:
                 <div class='metric-label'>Repeatability Rate</div>
                 <div class='metric-value'>{rep_rate_std:.2f}%</div>
                 <div class='metric-separator'></div>
-                <div class='metric-label'>Distinctiveness (Var)</div>
-                <div class='metric-value'>{int(match_score_std)}</div>
+                <div class='metric-label'>Matching Score</div>
+                <div class='metric-value'>{match_score_std:.1f}%</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -472,8 +528,8 @@ else:
                 <div class='metric-label'>Repeatability Rate</div>
                 <div class='metric-value'>{rep_rate_enh:.2f}%</div>
                 <div class='metric-separator'></div>
-                <div class='metric-label'>Distinctiveness (Var)</div>
-                <div class='metric-value'>{int(match_score_enh)}</div>
+                <div class='metric-label'>Matching Score</div>
+                <div class='metric-value'>{match_score_enh:.1f}%</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -505,12 +561,15 @@ else:
             ax2.spines['top'].set_visible(False)
             ax2.spines['right'].set_visible(False)
             st.pyplot(fig2)
+        
+        # Calculate the difference for the text (SOP 3)
+        match_diff = match_score_enh - match_score_std
 
         st.markdown(f"""
         <div class='conclusion-card'>
             <h3>CONCLUSION</h3>
             <p style='line-height: 1.6;'>The Enhanced CSIFT algorithm demonstrated a <strong>{((time_std-time_enh)/time_std)*100:.1f}% reduction</strong> in computational overhead due to vectorization (SOP 1). 
-            Keypoint detection in low-texture regions increased by <strong>{dens_enh - dens_std} points</strong>, validating the adaptive thresholding module (SOP 2). 
-            Finally, the descriptor distinctiveness score improved, confirming the efficacy of the RootSIFT normalization (SOP 3).</p>
+            Keypoint detection increased by <strong>{dens_enh - dens_std} points</strong>, validating the adaptive thresholding module (SOP 2). 
+            Finally, the matching score changed by <strong>{match_diff:+.1f}%</strong>, quantifying the discriminative power of the RootSIFT normalization (SOP 3).</p>
         </div>
         """, unsafe_allow_html=True)
