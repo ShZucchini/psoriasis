@@ -175,114 +175,160 @@ st.markdown("""
 class CSIFT_Algorithms:
     
     @staticmethod
+    def preprocess_image(image):
+        """
+        Standardizes the image before analysis to ensure consistency.
+        1. Hair Removal (Morphological Closing)
+        2. Noise Reduction (Gaussian Blur)
+        """
+        # Convert to Gray for structure analysis
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        
+        # 1. Digital Hair Removal (Fast Version)
+        # Create a kernel that looks like a thin line (hair structure)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (17, 17))
+        
+        # 'BlackHat' operation finds dark details on bright background (hairs)
+        blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, kernel)
+        
+        # Inpaint the hairs (simple thresholding trick)
+        # Anything that was 'blackhat' detected gets blurred out
+        _, thresh = cv2.threshold(blackhat, 10, 255, cv2.THRESH_BINARY)
+        inpainted = cv2.inpaint(image, thresh, 1, cv2.INPAINT_TELEA)
+        
+        # 2. Mild Blur to kill sensor noise
+        processed = cv2.GaussianBlur(inpainted, (3, 3), 0)
+        
+        return processed
+
+    @staticmethod
     def rgb_to_invariant_iterative(image):
-        """
-        STANDARD ALGORITHM (SOP 1 - PROBLEM)
-        Simulates the 'Iterative Linear Transformation' which causes high overhead.
-        """
+        """STANDARD ALGORITHM (SOP 1 - PROBLEM)"""
         rows, cols, _ = image.shape
         invariant = np.zeros((rows, cols), dtype=np.float32)
-        
-        # Slow Iterative Loop (The Problem)
         for i in range(rows):
             for j in range(cols):
-                r = image[i, j, 0]
-                g = image[i, j, 1]
-                b = image[i, j, 2]
-                val = (0.299 * r) + (0.587 * g) + (0.114 * b)
-                invariant[i, j] = val
-                
+                r, g, b = image[i, j]
+                invariant[i, j] = (0.299 * r) + (0.587 * g) + (0.114 * b)
         return invariant.astype(np.uint8)
 
     @staticmethod
     def rgb_to_invariant_vectorized(image):
-        """
-        ENHANCED ALGORITHM (SOP 1 - SOLUTION)
-        Uses 'Vectorized Matrix Transformation' + CLAHE for Texture Preservation.
-        """
-        # 1. Convert to Float
+        """ENHANCED ALGORITHM (SOP 1 - SOLUTION)"""
         img_float = image.astype(np.float32)
-        
-        # 2. Vectorized Matrix Multiplication (C = M . I)
-        M = np.array([[0.299, 0.587, 0.114]]) 
+        M = np.array([[0.299, 0.587, 0.114]])
         invariant = cv2.transform(img_float, M)
         
-        # 3. Logarithmic Stabilization (SOP 1)
-        epsilon = 1e-3
-        invariant = np.log(invariant + epsilon)
-        
-        # 4. Normalize to 0-255
+        # Logarithmic Stabilization
+        invariant = np.log(invariant + 1e-3)
         invariant = cv2.normalize(invariant, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
         
-        # --- CRITICAL FIX: CLAHE (Contrast Enhancement) ---
-        # This restores the texture of scales that might be washed out by the Log transform.
+        # CLAHE (Contrast Limited Adaptive Histogram Equalization)
+        # This is VITAL for bringing out soft texture in skin.
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
-        if len(invariant.shape) == 3:
-            invariant = invariant[:,:,0] # Ensure 2D
+        if len(invariant.shape) == 3: invariant = invariant[:,:,0]
         invariant = clahe.apply(invariant)
-        
         return invariant
 
     @staticmethod
-    def texture_aware_detection(image_gray):
+    def generate_lesion_mask(image_rgb):
         """
-        ENHANCED ALGORITHM (SOP 2)
-        Adaptive Threshold + Harris Corners (Robust).
+        Otsu's Thresholding on Cr Channel.
+        Added 'Erosion' to remove edge artifacts.
         """
-        # 1. Adaptive Detection
-        # Lower threshold to 0.03 (Standard is 0.04). 
-        # 0.03 is a safe "Enhanced" middle ground to catch more but not noise.
-        sift_sensitive = cv2.SIFT_create(contrastThreshold=0.02, edgeThreshold=10)
-        kp_adaptive = sift_sensitive.detect(image_gray, None)
+        ycrcb = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2YCrCb)
+        cr_channel = ycrcb[:,:,1]
         
-        # 2. Hybrid Supplementation (Harris Corners)
-        # We perform Harris to find corners that SIFT missed
-        harris_response = cv2.cornerHarris(image_gray, blockSize=2, ksize=3, k=0.04)
-        harris_normalized = cv2.normalize(harris_response, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+        blurred = cv2.GaussianBlur(cr_channel, (5, 5), 0)
         
-        # Lower threshold to catch more scales (was 100, now 80)
-        harris_pts = np.argwhere(harris_normalized > 60) 
+        # Otsu's Thresholding
+        _, mask = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         
-        # Sort by strength (Crucial for stability)
-        if len(harris_pts) > 0:
-            values = harris_normalized[harris_pts[:, 0], harris_pts[:, 1]]
-            sorted_indices = np.argsort(values)[::-1]
-            harris_pts = harris_pts[sorted_indices]
+        # FIX: Erode the mask slightly. 
+        # This prevents detecting the "edge" between skin and background as a feature.
+        kernel = np.ones((3,3), np.uint8)
+        mask = cv2.erode(mask, kernel, iterations=2) 
         
-        # Cap at 2000 points to prevent explosion but allow detailed capture
-        max_harris = 2000
-        if len(harris_pts) > max_harris:
-             harris_pts = harris_pts[:max_harris]
+        return mask
 
+    @staticmethod
+    def fast_nms(keypoints, radius=4):
+        """
+        Spatial NMS.
+        Radius reduced to 4 (was 8). 
+        radius=8 was too aggressive and killing too many valid points.
+        """
+        if not keypoints: return []
+        
+        # Sort by response (strongest first)
+        keypoints = sorted(keypoints, key=lambda x: x.response, reverse=True)
+        kept = []
+        occupied = set()
+        
+        for kp in keypoints:
+            x, y = int(kp.pt[0]), int(kp.pt[1])
+            gx, gy = x // radius, y // radius
+            
+            # Check if grid cell or neighbors are occupied
+            is_close = False
+            for dx in [-1, 0, 1]:
+                for dy in [-1, 0, 1]:
+                    if (gx + dx, gy + dy) in occupied:
+                        is_close = True
+                        break
+                if is_close: break
+            
+            if not is_close:
+                kept.append(kp)
+                occupied.add((gx, gy))
+                
+        return kept
+
+    @staticmethod
+    def texture_aware_detection(invariant_image, original_rgb):
+        """
+        BALANCED MODE (SOP 2)
+        Restores sensitivity to soft skin texture while keeping focus on the lesion.
+        """
+        # 1. Mask
+        mask = CSIFT_Algorithms.generate_lesion_mask(original_rgb)
+        
+        # 2. Adaptive Detection (SIFT)
+        # RELAXED: Lowered from 0.04 -> 0.025
+        # Skin texture is low contrast. We need to let more points in, 
+        # then let NMS filter the bad ones.
+        sift = cv2.SIFT_create(contrastThreshold=0.025, edgeThreshold=10)
+        kp_adaptive = list(sift.detect(invariant_image, mask))
+        
+        # 3. Hybrid Supplementation (Harris)
+        harris_resp = cv2.cornerHarris(invariant_image, 2, 3, 0.04)
+        harris_norm = cv2.normalize(harris_resp, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+        harris_norm = cv2.bitwise_and(harris_norm, harris_norm, mask=mask)
+        
+        # RELAXED: Lowered from 120 -> 65
+        # Psoriasis scales are not sharp corners. 65 captures organic edges.
+        harris_pts = np.argwhere(harris_norm > 65)
+        
         kp_harris = []
         for pt in harris_pts:
-            kp_harris.append(cv2.KeyPoint(float(pt[1]), float(pt[0]), 3))
+            resp = float(harris_norm[pt[0], pt[1]])
+            kp_harris.append(cv2.KeyPoint(float(pt[1]), float(pt[0]), 3, response=resp))
             
-        return list(kp_adaptive) + kp_harris
+        # 4. Merge & NMS
+        # Using Radius=4 ensures we don't have clumps, but we keep enough density.
+        final_kps = CSIFT_Algorithms.fast_nms(kp_adaptive + kp_harris, radius=4)
+        
+        return final_kps
 
     @staticmethod
     def root_sift_normalization(descriptors):
-        """
-        ENHANCED ALGORITHM (SOP 3)
-        Standard L2 -> Power-Law (RootSIFT) -> L2
-        FIX: Scaled to 0-255 range to allow fair comparison with Standard SIFT.
-        """
-        if descriptors is None:
-            return None
-            
-        # 1. L1 Normalize
+        """ENHANCED ALGORITHM (SOP 3)"""
+        if descriptors is None: return None
         eps = 1e-7
         descriptors /= (descriptors.sum(axis=1, keepdims=True) + eps)
-        
-        # 2. Power-Law (Square Root)
         descriptors = np.sqrt(descriptors)
-        
-        # 3. L2 Normalize
         descriptors /= (np.linalg.norm(descriptors, axis=1, keepdims=True) + eps)
-        
-        # 4. SCALING FIX: Convert 0.0-1.0 float to 0-255 scale
         descriptors *= 255.0
-        
         return descriptors
 
 # --- EXECUTION FUNCTIONS ---
@@ -315,15 +361,17 @@ def run_standard_csift(image):
 def run_enhanced_csift(image):
     start_time = time.time()
     
-    # SOP 1 Solution: Vectorization + CLAHE
-    invariant_img = CSIFT_Algorithms.rgb_to_invariant_vectorized(image)
-    if len(invariant_img.shape) == 3:
-        invariant_img = invariant_img[:,:,0]
+    # STEP 0: PRE-PROCESSING (New!)
+    clean_image = CSIFT_Algorithms.preprocess_image(image)
     
-    # SOP 2 Solution: Adaptive Detection
-    keypoints = CSIFT_Algorithms.texture_aware_detection(invariant_img)
+    # SOP 1: Invariant (Use clean_image now!)
+    invariant_img = CSIFT_Algorithms.rgb_to_invariant_vectorized(clean_image)
+    if len(invariant_img.shape) == 3: invariant_img = invariant_img[:,:,0]
     
-    # SOP 3 Solution: RootSIFT
+    # SOP 2: Detection (Use clean_image for masking!)
+    keypoints = CSIFT_Algorithms.texture_aware_detection(invariant_img, clean_image)
+    
+    # SOP 3: RootSIFT
     sift = cv2.SIFT_create()
     _, descriptors = sift.compute(invariant_img, keypoints)
     enhanced_descriptors = CSIFT_Algorithms.root_sift_normalization(descriptors)
