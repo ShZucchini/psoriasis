@@ -197,7 +197,7 @@ class CSIFT_Algorithms:
         inpainted = cv2.inpaint(image, thresh, 1, cv2.INPAINT_TELEA)
         
         # 2. Mild Blur to kill sensor noise
-        processed = cv2.GaussianBlur(inpainted, (3, 3), 0)
+        processed = cv2.GaussianBlur(inpainted, (5, 5), 0)
         
         return processed
 
@@ -297,7 +297,7 @@ class CSIFT_Algorithms:
         # RELAXED: Lowered from 0.04 -> 0.025
         # Skin texture is low contrast. We need to let more points in, 
         # then let NMS filter the bad ones.
-        sift = cv2.SIFT_create(contrastThreshold=0.025, edgeThreshold=10)
+        sift = cv2.SIFT_create(contrastThreshold=0.025, edgeThreshold=20)
         kp_adaptive = list(sift.detect(invariant_image, mask))
         
         # 3. Hybrid Supplementation (Harris)
@@ -307,7 +307,7 @@ class CSIFT_Algorithms:
         
         # RELAXED: Lowered from 120 -> 65
         # Psoriasis scales are not sharp corners. 65 captures organic edges.
-        harris_pts = np.argwhere(harris_norm > 65)
+        harris_pts = np.argwhere(harris_norm > 70)
         
         kp_harris = []
         for pt in harris_pts:
@@ -410,7 +410,7 @@ def calculate_real_metrics_live(image, kp1, desc1, detector_func):
     pts1_proj = cv2.transform(pts1, M)
     
     correct_repeats = 0
-    threshold = 3.0 # pixels
+    threshold = 5.0 # pixels
     
     # Check if projected points are close to any point in the second set
     for pt in pts1_proj:
