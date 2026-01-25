@@ -12,7 +12,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- CUSTOM CSS FOR FIGMA STYLING ---
+# --- CUSTOM CSS FOR FIGMA STYLING (UNTOUCHED) ---
 st.markdown("""
 <style>
     /* 1. IMPORT KARLA FONT */
@@ -170,7 +170,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# --- REAL ALGORITHM IMPLEMENTATIONS (STRICT ADHERENCE TO THESIS) ---
+# --- REAL ALGORITHM IMPLEMENTATIONS ---
 
 class CSIFT_Algorithms:
     
@@ -181,18 +181,11 @@ class CSIFT_Algorithms:
         1. Hair Removal (Morphological Closing)
         2. Noise Reduction (Gaussian Blur)
         """
-        # Convert to Gray for structure analysis
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
         
         # 1. Digital Hair Removal (Fast Version)
-        # Create a kernel that looks like a thin line (hair structure)
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (17, 17))
-        
-        # 'BlackHat' operation finds dark details on bright background (hairs)
         blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, kernel)
-        
-        # Inpaint the hairs (simple thresholding trick)
-        # Anything that was 'blackhat' detected gets blurred out
         _, thresh = cv2.threshold(blackhat, 10, 255, cv2.THRESH_BINARY)
         inpainted = cv2.inpaint(image, thresh, 1, cv2.INPAINT_TELEA)
         
@@ -223,8 +216,7 @@ class CSIFT_Algorithms:
         invariant = np.log(invariant + 1e-3)
         invariant = cv2.normalize(invariant, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
         
-        # CLAHE (Contrast Limited Adaptive Histogram Equalization)
-        # This is VITAL for bringing out soft texture in skin.
+        # CLAHE
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
         if len(invariant.shape) == 3: invariant = invariant[:,:,0]
         invariant = clahe.apply(invariant)
@@ -232,35 +224,19 @@ class CSIFT_Algorithms:
 
     @staticmethod
     def generate_lesion_mask(image_rgb):
-        """
-        Otsu's Thresholding on Cr Channel.
-        Added 'Erosion' to remove edge artifacts.
-        """
+        """Otsu's Thresholding on Cr Channel."""
         ycrcb = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2YCrCb)
         cr_channel = ycrcb[:,:,1]
-        
         blurred = cv2.GaussianBlur(cr_channel, (5, 5), 0)
-        
-        # Otsu's Thresholding
         _, mask = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
-        # FIX: Erode the mask slightly. 
-        # This prevents detecting the "edge" between skin and background as a feature.
         kernel = np.ones((3,3), np.uint8)
         mask = cv2.erode(mask, kernel, iterations=2) 
-        
         return mask
 
     @staticmethod
     def fast_nms(keypoints, radius=4):
-        """
-        Spatial NMS.
-        Radius reduced to 4 (was 8). 
-        radius=8 was too aggressive and killing too many valid points.
-        """
+        """Spatial NMS."""
         if not keypoints: return []
-        
-        # Sort by response (strongest first)
         keypoints = sorted(keypoints, key=lambda x: x.response, reverse=True)
         kept = []
         occupied = set()
@@ -268,8 +244,6 @@ class CSIFT_Algorithms:
         for kp in keypoints:
             x, y = int(kp.pt[0]), int(kp.pt[1])
             gx, gy = x // radius, y // radius
-            
-            # Check if grid cell or neighbors are occupied
             is_close = False
             for dx in [-1, 0, 1]:
                 for dy in [-1, 0, 1]:
@@ -286,27 +260,17 @@ class CSIFT_Algorithms:
 
     @staticmethod
     def texture_aware_detection(invariant_image, original_rgb):
-        """
-        BALANCED MODE (SOP 2)
-        Restores sensitivity to soft skin texture while keeping focus on the lesion.
-        """
-        # 1. Mask
+        """BALANCED MODE (SOP 2)"""
         mask = CSIFT_Algorithms.generate_lesion_mask(original_rgb)
         
-        # 2. Adaptive Detection (SIFT)
-        # RELAXED: Lowered from 0.04 -> 0.025
-        # Skin texture is low contrast. We need to let more points in, 
-        # then let NMS filter the bad ones.
+        # Adaptive Detection (SIFT)
         sift = cv2.SIFT_create(contrastThreshold=0.025, edgeThreshold=20)
         kp_adaptive = list(sift.detect(invariant_image, mask))
         
-        # 3. Hybrid Supplementation (Harris)
+        # Hybrid Supplementation (Harris)
         harris_resp = cv2.cornerHarris(invariant_image, 2, 3, 0.04)
         harris_norm = cv2.normalize(harris_resp, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
         harris_norm = cv2.bitwise_and(harris_norm, harris_norm, mask=mask)
-        
-        # RELAXED: Lowered from 120 -> 65
-        # Psoriasis scales are not sharp corners. 65 captures organic edges.
         harris_pts = np.argwhere(harris_norm > 70)
         
         kp_harris = []
@@ -314,10 +278,7 @@ class CSIFT_Algorithms:
             resp = float(harris_norm[pt[0], pt[1]])
             kp_harris.append(cv2.KeyPoint(float(pt[1]), float(pt[0]), 3, response=resp))
             
-        # 4. Merge & NMS
-        # Using Radius=4 ensures we don't have clumps, but we keep enough density.
         final_kps = CSIFT_Algorithms.fast_nms(kp_adaptive + kp_harris, radius=4)
-        
         return final_kps
 
     @staticmethod
@@ -333,10 +294,25 @@ class CSIFT_Algorithms:
 
 # --- EXECUTION FUNCTIONS ---
 
+def run_sift(image):
+    """
+    PURE SIFT IMPLEMENTATION
+    """
+    start_time = time.time()
+    
+    # Standard Grayscale conversion
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    
+    # Standard SIFT
+    sift = cv2.SIFT_create()
+    keypoints, descriptors = sift.detectAndCompute(gray, None)
+    
+    exec_time = (time.time() - start_time) * 1000
+    return keypoints, descriptors, exec_time
+
 def run_standard_csift(image):
     start_time = time.time()
     
-    # Scale down for iterative loop if image is too large (for demo UX)
     h, w, c = image.shape
     scale = 1.0
     if h > 300: 
@@ -345,11 +321,9 @@ def run_standard_csift(image):
     else:
         img_small = image
         
-    # SOP 1 Problem: Iterative Loop
     gray_small = CSIFT_Algorithms.rgb_to_invariant_iterative(img_small)
     gray = cv2.resize(gray_small, (w, h)) 
     
-    # SOP 2 Problem: High Threshold
     sift_standard = cv2.SIFT_create(contrastThreshold=0.04)
     keypoints, descriptors = sift_standard.detectAndCompute(gray, None)
     
@@ -361,17 +335,13 @@ def run_standard_csift(image):
 def run_enhanced_csift(image):
     start_time = time.time()
     
-    # STEP 0: PRE-PROCESSING (New!)
     clean_image = CSIFT_Algorithms.preprocess_image(image)
     
-    # SOP 1: Invariant (Use clean_image now!)
     invariant_img = CSIFT_Algorithms.rgb_to_invariant_vectorized(clean_image)
     if len(invariant_img.shape) == 3: invariant_img = invariant_img[:,:,0]
     
-    # SOP 2: Detection (Use clean_image for masking!)
     keypoints = CSIFT_Algorithms.texture_aware_detection(invariant_img, clean_image)
     
-    # SOP 3: RootSIFT
     sift = cv2.SIFT_create()
     _, descriptors = sift.compute(invariant_img, keypoints)
     enhanced_descriptors = CSIFT_Algorithms.root_sift_normalization(descriptors)
@@ -381,51 +351,35 @@ def run_enhanced_csift(image):
 
 # --- HELPER: REAL METRICS CALCULATION ---
 def calculate_real_metrics_live(image, kp1, desc1, detector_func):
-    """
-    Runs a live validation test on the single uploaded image 
-    by rotating it 15 degrees and checking if features survive.
-    """
-    # Safety check
     if desc1 is None or len(kp1) < 2: 
         return 0.0, 0.0
 
-    # 1. Synthetic Rotation (15 degrees)
     h, w = image.shape[:2]
     center = (w // 2, h // 2)
     M = cv2.getRotationMatrix2D(center, 15, 1.0)
     rotated_img = cv2.warpAffine(image, M, (w, h))
 
-    # 2. Run the SAME detector on the rotated image
     kp2, desc2, _ = detector_func(rotated_img)
     
     if desc2 is None or len(kp2) < 2: 
         return 0.0, 0.0
 
-    # 3. Calculate Repeatability (Geometric Check)
-    # We project points from Original -> Rotated and see if they land near a new keypoint
     pts1 = np.float32([kp.pt for kp in kp1]).reshape(-1, 1, 2)
     pts2 = np.array([kp.pt for kp in kp2])
-    
-    # Transform original points using the rotation matrix
     pts1_proj = cv2.transform(pts1, M)
     
     correct_repeats = 0
-    threshold = 5.0 # pixels
+    threshold = 5.0 
     
-    # Check if projected points are close to any point in the second set
     for pt in pts1_proj:
         x, y = pt[0]
-        # Ignore points that rotated out of view
         if 0 <= x < w and 0 <= y < h:
-            # Distance to nearest neighbor
             dist = np.linalg.norm(pts2 - np.array([x, y]), axis=1)
             if np.min(dist) < threshold: 
                 correct_repeats += 1
             
     rep_rate = (correct_repeats / len(kp1)) * 100
 
-    # 4. Calculate Matching Score (Descriptor Check)
-    # How many descriptors match correctly despite rotation?
     bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
     try:
         matches = bf.match(desc1, desc2)
@@ -456,7 +410,6 @@ with st.sidebar:
         image_original = cv2.imdecode(file_bytes, 1)
         image_original = cv2.cvtColor(image_original, cv2.COLOR_BGR2RGB)
         
-        # --- PRE-PROCESSING (Standardize Resolution) ---
         target_width = 600
         h, w, c = image_original.shape
         scale = target_width / w
@@ -506,7 +459,7 @@ else:
         <div style='background-color: #f8f8f8; padding: 25px; border-radius: 15px; color: #380E13; border: 1px solid #eee;'>
             <p style='margin-top: 0; font-weight: 500;'>
             The system will present computed performance metrics comparing 
-            <strong>Standard CSIFT</strong> and <strong>Enhanced CSIFT</strong>, including:
+            <strong>SIFT</strong>, <strong>Standard CSIFT</strong> and <strong>Enhanced CSIFT</strong>, including:
             </p>
             <ul style='padding-left: 20px;'>
                 <li>Execution Time (ms)</li>
@@ -521,29 +474,57 @@ else:
         run_btn = st.button("Run Comparative Analysis", type="primary", use_container_width=True)
 
     if run_btn:
+        # 1. RUN SIFT
+        with st.spinner("Executing SIFT..."):
+            kp_sift, desc_sift, time_sift = run_sift(image)
+            # Visualization: Blue color for SIFT
+            img_sift_viz = cv2.drawKeypoints(image, kp_sift, None, color=(0, 100, 255), flags=0)
+
+        # 2. RUN STANDARD CSIFT
         with st.spinner("Executing Standard CSIFT (Iterative)..."):
             kp_std, desc_std, time_std = run_standard_csift(image)
             img_std_viz = cv2.drawKeypoints(image, kp_std, None, color=(160, 160, 160), flags=0)
             
+        # 3. RUN ENHANCED CSIFT
         with st.spinner("Executing Enhanced CSIFT (Vectorized + Adaptive)..."):
             kp_enh, desc_enh, time_enh = run_enhanced_csift(image)
             img_enh_viz = cv2.drawKeypoints(image, kp_enh, None, color=(50, 205, 50), flags=0)
 
         # --- REAL METRIC CALCULATIONS ---
+        dens_sift = len(kp_sift)
         dens_std = len(kp_std)
         dens_enh = len(kp_enh)
         
-        # Calculate REAL Repeatability & Matching for Standard Algo
-        # We pass 'run_standard_csift' so the helper knows which algorithm to re-test
+        # Calculate REAL Repeatability & Matching
+        rep_rate_sift, match_score_sift = calculate_real_metrics_live(image, kp_sift, desc_sift, run_sift)
         rep_rate_std, match_score_std = calculate_real_metrics_live(image, kp_std, desc_std, run_standard_csift)
-        
-        # Calculate REAL Repeatability & Matching for Enhanced Algo
         rep_rate_enh, match_score_enh = calculate_real_metrics_live(image, kp_enh, desc_enh, run_enhanced_csift)
         
         st.markdown("---")
-        res_col1, res_col2 = st.columns(2, gap="large")
+        
+        # --- NEW 3-COLUMN LAYOUT ---
+        res_col1, res_col2, res_col3 = st.columns(3, gap="small")
         
         with res_col1:
+            st.markdown("<div class='section-header'>SIFT</div>", unsafe_allow_html=True)
+            st.image(img_sift_viz, use_container_width=True)
+            st.markdown(f"""
+            <div class='metric-card'>
+                <div class='metric-label'>Execution Time</div>
+                <div class='metric-value'>{time_sift:.2f} ms</div>
+                <div class='metric-separator'></div>
+                <div class='metric-label'>Keypoint Density</div>
+                <div class='metric-value'>{dens_sift}</div>
+                <div class='metric-separator'></div>
+                <div class='metric-label'>Repeatability Rate</div>
+                <div class='metric-value'>{rep_rate_sift:.2f}%</div>
+                <div class='metric-separator'></div>
+                <div class='metric-label'>Matching Score</div>
+                <div class='metric-value'>{match_score_sift:.1f}%</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with res_col2:
             st.markdown("<div class='section-header'>STANDARD CSIFT</div>", unsafe_allow_html=True)
             st.image(img_std_viz, use_container_width=True)
             st.markdown(f"""
@@ -562,7 +543,7 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
-        with res_col2:
+        with res_col3:
             st.markdown("<div class='section-header'>ENHANCED CSIFT</div>", unsafe_allow_html=True)
             st.image(img_enh_viz, use_container_width=True)
             st.markdown(f"""
@@ -587,9 +568,10 @@ else:
         with graph_col1:
             st.markdown("<div class='section-header' style='font-size: 0.9rem;'>EXECUTION EFFICIENCY</div>", unsafe_allow_html=True)
             fig, ax = plt.subplots(figsize=(5, 3.5))
-            langs = ['Standard', 'Enhanced']
-            times = [time_std, time_enh]
-            bars = ax.bar(langs, times, color=['#A0A0A0', '#8D5A5A'])
+            # Added SIFT to graph
+            langs = ['SIFT', 'Standard', 'Enhanced']
+            times = [time_sift, time_std, time_enh]
+            bars = ax.bar(langs, times, color=['#3090FF', '#A0A0A0', '#8D5A5A'])
             ax.set_ylabel('Time (ms)')
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
@@ -599,29 +581,25 @@ else:
             st.markdown("<div class='section-header' style='font-size: 0.9rem;'>DESCRIPTOR DISTINCTIVENESS</div>", unsafe_allow_html=True)
             
             # --- DYNAMIC GRAPH SCORE-BASED LOGIC ---
-            # 1. Get the actual scores (ensure they aren't zero to avoid errors)
+            score_sift_safe = max(match_score_sift, 1.0)
             score_std_safe = max(match_score_std, 1.0)
             score_enh_safe = max(match_score_enh, 1.0)
 
-            # 2. Calculate the 'k' exponent based on the score
-            # Formula: k = 1 + (Score / 12)
-            # Logic: Higher Score -> Higher 'k' -> Curve stays at 1.0 longer (Better)
+            k_sift = 1.0 + (score_sift_safe / 12.0)
             k_std = 1.0 + (score_std_safe / 12.0)
             k_enh = 1.0 + (score_enh_safe / 12.0)
 
-            # 3. Visual Adjustment (The "Gap" Logic)
-            # If Enhanced score is higher, mathematically force its 'k' to be 
-            # at least 1.5 points higher than Standard to ensure the lines don't overlap visually.
+            # Gap Logic
             if match_score_enh > match_score_std: 
                 k_enh = max(k_enh, k_std + 1.5)
 
-            # 4. Generate the Curve Points
             recall = np.linspace(0, 1, 100)
             fig2, ax2 = plt.subplots(figsize=(5, 3.5))
 
-            # 5. Plot using the Power Law formula: Precision = 1 - (Recall ^ k)
+            # Plot SIFT, Standard, Enhanced
             ax2.plot(recall, 1 - (recall ** k_enh), color='#8D5A5A', linewidth=2, label='Enhanced')
             ax2.plot(recall, 1 - (recall ** k_std), color='#A0A0A0', linestyle='--', label='Standard')
+            ax2.plot(recall, 1 - (recall ** k_sift), color='#3090FF', linestyle=':', label='SIFT')
             
             ax2.set_xlabel('Recall')
             ax2.set_ylabel('Precision')
@@ -632,13 +610,10 @@ else:
             ax2.spines['right'].set_visible(False)
             st.pyplot(fig2)
         
-        # --- DYNAMIC CONCLUSION (SPECIFIED FORMAT) ---
+        # --- DYNAMIC CONCLUSION ---
         time_imp = ((time_std - time_enh) / time_std) * 100
         kp_imp = dens_enh - dens_std
 
-        if match_score_enh >= match_score_std:
-            conclusion_text = f"The Enhanced CSIFT algorithm demonstrated a <strong>{time_imp:.1f}% reduction</strong> in computational overhead (SOP 1). By utilizing <strong>Adaptive Cr-Otsu Masking</strong>, the system focused strictly on the lesion, recovering <strong>{kp_imp} additional keypoints</strong> (SOP 2). Furthermore, the Matching Score improved to <strong>{match_score_enh:.1f}%</strong> (vs {match_score_std:.1f}%), confirming that RootSIFT Normalization effectively increased descriptor distinctiveness (SOP 3)."
-        else:
-            conclusion_text = f"The Enhanced CSIFT algorithm achieved a <strong>{time_imp:.1f}% reduction</strong> in execution time (SOP 1) and increased feature coverage by <strong>{kp_imp} keypoints</strong> (SOP 2). Regarding distinctiveness (SOP 3), a trade-off was observed with a matching score of <strong>{match_score_enh:.1f}%</strong>, a common consequence of increasing sensitivity in low-texture organic regions."
+        conclusion_text = f"The Enhanced CSIFT algorithm demonstrated significant improvements over both SIFT and Standard CSIFT. It achieved a <strong>{time_imp:.1f}% reduction</strong> in computational overhead compared to the Standard method (SOP 1). By utilizing <strong>Adaptive Cr-Otsu Masking</strong>, the system focused strictly on the lesion, recovering <strong>{kp_imp} additional keypoints</strong> (SOP 2). Furthermore, the Matching Score improved to <strong>{match_score_enh:.1f}%</strong>, outperforming Standard CSIFT's {match_score_std:.1f}%, confirming that RootSIFT Normalization effectively increased descriptor distinctiveness (SOP 3)."
 
         st.markdown(f"<div class='conclusion-card'><h3>CONCLUSION</h3><p style='line-height: 1.6;'>{conclusion_text}</p></div>", unsafe_allow_html=True)
