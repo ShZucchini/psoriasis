@@ -3,6 +3,8 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import time
+import tracemalloc # Added for Memory Measurement
+import gc # Added for reliable memory garbage collection
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -292,12 +294,16 @@ class CSIFT_Algorithms:
         descriptors *= 255.0
         return descriptors
 
-# --- EXECUTION FUNCTIONS ---
+# --- EXECUTION FUNCTIONS (Modified for Memory Measurement) ---
 
 def run_sift(image):
     """
     PURE SIFT IMPLEMENTATION
     """
+    # Garbage collect before starting to ensure clean measurement
+    gc.collect()
+    tracemalloc.start()
+    
     start_time = time.time()
     
     # Standard Grayscale conversion
@@ -308,9 +314,18 @@ def run_sift(image):
     keypoints, descriptors = sift.detectAndCompute(gray, None)
     
     exec_time = (time.time() - start_time) * 1000
-    return keypoints, descriptors, exec_time
+    
+    # Measure Peak Memory
+    current, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    peak_mb = peak / (1024 * 1024)
+    
+    return keypoints, descriptors, exec_time, peak_mb
 
 def run_standard_csift(image):
+    gc.collect()
+    tracemalloc.start()
+    
     start_time = time.time()
     
     h, w, c = image.shape
@@ -329,10 +344,17 @@ def run_standard_csift(image):
     
     exec_time = (time.time() - start_time) * 1000 
     if scale < 1.0: exec_time = exec_time * (1.0 / (scale * scale))
+    
+    current, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    peak_mb = peak / (1024 * 1024)
         
-    return keypoints, descriptors, exec_time
+    return keypoints, descriptors, exec_time, peak_mb
 
 def run_enhanced_csift(image):
+    gc.collect()
+    tracemalloc.start()
+    
     start_time = time.time()
     
     clean_image = CSIFT_Algorithms.preprocess_image(image)
@@ -347,7 +369,12 @@ def run_enhanced_csift(image):
     enhanced_descriptors = CSIFT_Algorithms.root_sift_normalization(descriptors)
     
     exec_time = (time.time() - start_time) * 1000 
-    return keypoints, enhanced_descriptors, exec_time
+    
+    current, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    peak_mb = peak / (1024 * 1024)
+    
+    return keypoints, enhanced_descriptors, exec_time, peak_mb
 
 # --- HELPER: REAL METRICS CALCULATION ---
 def calculate_real_metrics_live(image, kp1, desc1, detector_func):
@@ -359,7 +386,8 @@ def calculate_real_metrics_live(image, kp1, desc1, detector_func):
     M = cv2.getRotationMatrix2D(center, 15, 1.0)
     rotated_img = cv2.warpAffine(image, M, (w, h))
 
-    kp2, desc2, _ = detector_func(rotated_img)
+    # Note: detector_func now returns 4 values, we only need the first 2 here
+    kp2, desc2, _, _ = detector_func(rotated_img)
     
     if desc2 is None or len(kp2) < 2: 
         return 0.0, 0.0
@@ -463,6 +491,7 @@ else:
             </p>
             <ul style='padding-left: 20px;'>
                 <li>Execution Time (ms)</li>
+                <li>Memory Usage (MB)</li>
                 <li>Keypoint Density</li>
                 <li>Repeatability Rate</li>
                 <li>Matching Score</li>
@@ -476,18 +505,18 @@ else:
     if run_btn:
         # 1. RUN SIFT
         with st.spinner("Executing SIFT..."):
-            kp_sift, desc_sift, time_sift = run_sift(image)
+            kp_sift, desc_sift, time_sift, mem_sift = run_sift(image)
             # Visualization: Blue color for SIFT
             img_sift_viz = cv2.drawKeypoints(image, kp_sift, None, color=(0, 100, 255), flags=0)
 
         # 2. RUN STANDARD CSIFT
         with st.spinner("Executing Standard CSIFT (Iterative)..."):
-            kp_std, desc_std, time_std = run_standard_csift(image)
+            kp_std, desc_std, time_std, mem_std = run_standard_csift(image)
             img_std_viz = cv2.drawKeypoints(image, kp_std, None, color=(160, 160, 160), flags=0)
             
         # 3. RUN ENHANCED CSIFT
         with st.spinner("Executing Enhanced CSIFT (Vectorized + Adaptive)..."):
-            kp_enh, desc_enh, time_enh = run_enhanced_csift(image)
+            kp_enh, desc_enh, time_enh, mem_enh = run_enhanced_csift(image)
             img_enh_viz = cv2.drawKeypoints(image, kp_enh, None, color=(50, 205, 50), flags=0)
 
         # --- REAL METRIC CALCULATIONS ---
@@ -513,6 +542,9 @@ else:
                 <div class='metric-label'>Execution Time</div>
                 <div class='metric-value'>{time_sift:.2f} ms</div>
                 <div class='metric-separator'></div>
+                <div class='metric-label'>Memory Usage</div>
+                <div class='metric-value'>{mem_sift:.2f} MB</div>
+                <div class='metric-separator'></div>
                 <div class='metric-label'>Keypoint Density</div>
                 <div class='metric-value'>{dens_sift}</div>
                 <div class='metric-separator'></div>
@@ -532,6 +564,9 @@ else:
                 <div class='metric-label'>Execution Time</div>
                 <div class='metric-value'>{time_std:.2f} ms</div>
                 <div class='metric-separator'></div>
+                <div class='metric-label'>Memory Usage</div>
+                <div class='metric-value'>{mem_std:.2f} MB</div>
+                <div class='metric-separator'></div>
                 <div class='metric-label'>Keypoint Density</div>
                 <div class='metric-value'>{dens_std}</div>
                 <div class='metric-separator'></div>
@@ -550,6 +585,9 @@ else:
             <div class='metric-card'>
                 <div class='metric-label'>Execution Time</div>
                 <div class='metric-value'>{time_enh:.2f} ms</div>
+                <div class='metric-separator'></div>
+                <div class='metric-label'>Memory Usage</div>
+                <div class='metric-value'>{mem_enh:.2f} MB</div>
                 <div class='metric-separator'></div>
                 <div class='metric-label'>Keypoint Density</div>
                 <div class='metric-value'>{dens_enh}</div>
