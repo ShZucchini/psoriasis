@@ -200,7 +200,7 @@ class CSIFT_Algorithms:
     def rgb_to_invariant_iterative(image):
         """STANDARD ALGORITHM (SOP 1 - PROBLEM)"""
         rows, cols, _ = image.shape
-        invariant = np.zeros((rows, cols), dtype=np.float32)
+        invariant = np.zeros((rows, cols), dtype=np.float64)
         for i in range(rows):
             for j in range(cols):
                 r, g, b = image[i, j]
@@ -210,7 +210,7 @@ class CSIFT_Algorithms:
     @staticmethod
     def rgb_to_invariant_vectorized(image):
         """ENHANCED ALGORITHM (SOP 1 - SOLUTION)"""
-        img_float = image.astype(np.float32)
+        img_float = image.astype(np.float64)
         M = np.array([[0.299, 0.587, 0.114]])
         invariant = cv2.transform(img_float, M)
         
@@ -262,25 +262,29 @@ class CSIFT_Algorithms:
 
     @staticmethod
     def texture_aware_detection(invariant_image, original_rgb):
-        """BALANCED MODE (SOP 2)"""
+        """BALANCED MODE (SOP 2) - Optimized for Density & Memory"""
         mask = CSIFT_Algorithms.generate_lesion_mask(original_rgb)
         
-        # Adaptive Detection (SIFT)
-        sift = cv2.SIFT_create(contrastThreshold=0.025, edgeThreshold=20)
+        # FIX: Added nfeatures=800 to cap the density
+        # Also increased contrastThreshold to ignore weak, noisy points
+        sift = cv2.SIFT_create(nfeatures=1200, contrastThreshold=0.03, edgeThreshold=15)
         kp_adaptive = list(sift.detect(invariant_image, mask))
         
         # Hybrid Supplementation (Harris)
         harris_resp = cv2.cornerHarris(invariant_image, 2, 3, 0.04)
         harris_norm = cv2.normalize(harris_resp, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
         harris_norm = cv2.bitwise_and(harris_norm, harris_norm, mask=mask)
-        harris_pts = np.argwhere(harris_norm > 70)
+        
+        # FIX: Increased threshold from 70 to 140 to filter out weak "texture" noise
+        harris_pts = np.argwhere(harris_norm > 140)
         
         kp_harris = []
         for pt in harris_pts:
             resp = float(harris_norm[pt[0], pt[1]])
             kp_harris.append(cv2.KeyPoint(float(pt[1]), float(pt[0]), 3, response=resp))
             
-        final_kps = CSIFT_Algorithms.fast_nms(kp_adaptive + kp_harris, radius=4)
+        # FIX: Increased NMS radius to 6 to prevent "clumping" of points in one area
+        final_kps = CSIFT_Algorithms.fast_nms(kp_adaptive + kp_harris, radius=6)
         return final_kps
 
     @staticmethod
@@ -339,7 +343,7 @@ def run_standard_csift(image):
     gray_small = CSIFT_Algorithms.rgb_to_invariant_iterative(img_small)
     gray = cv2.resize(gray_small, (w, h)) 
     
-    sift_standard = cv2.SIFT_create(contrastThreshold=0.04)
+    sift_standard = cv2.SIFT_create(nfeatures=800, contrastThreshold=0.04)
     keypoints, descriptors = sift_standard.detectAndCompute(gray, None)
     
     exec_time = (time.time() - start_time) * 1000 
@@ -354,6 +358,7 @@ def run_standard_csift(image):
 def run_enhanced_csift(image):
     gc.collect()
     tracemalloc.start()
+    
     
     start_time = time.time()
     
@@ -378,45 +383,49 @@ def run_enhanced_csift(image):
 
 # --- HELPER: REAL METRICS CALCULATION ---
 def calculate_real_metrics_live(image, kp1, desc1, detector_func):
-    if desc1 is None or len(kp1) < 2: 
+    if desc1 is None or len(kp1) < 10: 
         return 0.0, 0.0
 
-    h, w = image.shape[:2]
-    center = (w // 2, h // 2)
-    M = cv2.getRotationMatrix2D(center, 15, 1.0)
-    rotated_img = cv2.warpAffine(image, M, (w, h))
+    # --- STEP 1: PHOTOMETRIC TRANSFORMATION (SOP 2) ---
+    # We change the lighting condition (simulating clinical lighting variation)
+    # 0.8 makes it 20% darker; 1.2 would make it 20% brighter.
+    transformed_img = np.clip(image.astype(np.float32) * 0.8, 0, 255).astype(np.uint8)
 
-    # Note: detector_func now returns 4 values, we only need the first 2 here
-    kp2, desc2, _, _ = detector_func(rotated_img)
+    # Detect features in the 'dimmed' image
+    kp2, desc2, _, _ = detector_func(transformed_img)
     
-    if desc2 is None or len(kp2) < 2: 
+    if desc2 is None or len(kp2) < 10: 
         return 0.0, 0.0
 
-    pts1 = np.float32([kp.pt for kp in kp1]).reshape(-1, 1, 2)
-    pts2 = np.array([kp.pt for kp in kp2])
-    pts1_proj = cv2.transform(pts1, M)
+    # --- STEP 2: MATCHING WITH RATIO TEST ---
+    # Use KNN Match for Lowe's Ratio Test to filter ambiguous points
+    bf = cv2.BFMatcher(cv2.NORM_L2)
+    matches = bf.knnMatch(desc1, desc2, k=2)
     
-    correct_repeats = 0
-    threshold = 5.0 
-    
-    for pt in pts1_proj:
-        x, y = pt[0]
-        if 0 <= x < w and 0 <= y < h:
-            dist = np.linalg.norm(pts2 - np.array([x, y]), axis=1)
-            if np.min(dist) < threshold: 
-                correct_repeats += 1
-            
-    rep_rate = (correct_repeats / len(kp1)) * 100
+    good_matches = []
+    for m, n in matches:
+        if m.distance < 0.80 * n.distance:
+            good_matches.append(m)
 
-    bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
-    try:
-        matches = bf.match(desc1, desc2)
-        match_score = (len(matches) / len(kp1)) * 100
-    except:
-        match_score = 0.0
+    # --- STEP 3: PROSAC VALIDATION ---
+    if len(good_matches) > 10:
+        src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+        dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+        
+        # PROSAC finds the points that are geometrically stable. 
+        # Since the image didn't move, we expect an Identity transformation.
+        # USAC_PROSAC is the modern, robust implementation.
+        _, mask = cv2.findHomography(src_pts, dst_pts, cv2.USAC_PROSAC, 3.0)
+        inliers_count = np.sum(mask)
+        
+        # Repeatability: Percentage of original points that stayed stable under new light
+        rep_rate = (inliers_count / len(kp1)) * 100
+        # Match Score: Percentage of matches that were validated by PROSAC
+        match_score = (inliers_count / len(good_matches)) * 100
+    else:
+        rep_rate, match_score = 0.0, 0.0
     
     return rep_rate, match_score
-
 # --- UI LOGIC ---
 
 with st.sidebar:
