@@ -179,7 +179,7 @@ class CSIFT_Algorithms:
     @staticmethod
     def preprocess_image(image):
 
-        # 1. FORCE RESIZE to 600x600 for consistency & blur
+        # 1. Resolution normalization for controlled computational evaluation.
         resized = cv2.resize(image, (600, 600))
         processed = cv2.GaussianBlur(resized, (5, 5), 0)
         
