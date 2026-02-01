@@ -369,49 +369,52 @@ def run_enhanced_csift(image):
 
 # --- HELPER: REAL METRICS CALCULATION ---
 def calculate_real_metrics_live(image, kp1, desc1, detector_func):
+    """
+    Consolidated Metric Calculator:
+    Returns: Repeatability, Matching Score, and Distinctiveness (Problem 3)
+    """
     if desc1 is None or len(kp1) < 10: 
-        return 0.0, 0.0
+        return 0.0, 0.0, 0.0 # Returns 3 values now
+
+    # --- NEW: CALCULATE DISTINCTIVENESS (PROBLEM 3 SIMULATION) ---
+    # We measure how unique each descriptor is compared to others in the same image
+    bf_dist = cv2.BFMatcher(cv2.NORM_L2)
+    # k=3 because k=1 is the point itself, k=2 is the best match
+    matches_dist = bf_dist.knnMatch(desc1, desc1, k=3)
+    
+    ratios = []
+    for m in matches_dist:
+        if len(m) >= 3:
+            d1, d2 = m[1].distance, m[2].distance
+            if d2 > 0: ratios.append(d1 / d2)
+    
+    # Higher % = Higher Distinctiveness (Solution to Problem 3)
+    distinct_score = (1 - np.mean(ratios)) * 100 if ratios else 0.0
 
     # --- STEP 1: PHOTOMETRIC TRANSFORMATION (SOP 2) ---
-    # We change the lighting condition (simulating clinical lighting variation)
-    # 0.8 makes it 20% darker; 1.2 would make it 20% brighter.
     transformed_img = np.clip(image.astype(np.float32) * 0.8, 0, 255).astype(np.uint8)
-
-    # Detect features in the 'dimmed' image
     kp2, desc2, _, _ = detector_func(transformed_img)
     
     if desc2 is None or len(kp2) < 10: 
-        return 0.0, 0.0
+        return 0.0, 0.0, distinct_score
 
-    # --- STEP 2: MATCHING WITH RATIO TEST ---
-    # Use KNN Match for Lowe's Ratio Test to filter ambiguous points
+    # --- STEP 2: MATCHING & PROSAC ---
     bf = cv2.BFMatcher(cv2.NORM_L2)
     matches = bf.knnMatch(desc1, desc2, k=2)
-    
-    good_matches = []
-    for m, n in matches:
-        if m.distance < 0.80 * n.distance:
-            good_matches.append(m)
+    good_matches = [m for m, n in matches if m.distance < 0.80 * n.distance]
 
-    # --- STEP 3: PROSAC VALIDATION ---
     if len(good_matches) > 10:
         src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
         dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-        
-        # PROSAC finds the points that are geometrically stable. 
-        # Since the image didn't move, we expect an Identity transformation.
-        # USAC_PROSAC is the modern, robust implementation.
         _, mask = cv2.findHomography(src_pts, dst_pts, cv2.USAC_PROSAC, 3.0)
         inliers_count = np.sum(mask)
         
-        # Repeatability: Percentage of original points that stayed stable under new light
         rep_rate = (inliers_count / len(kp1)) * 100
-        # Match Score: Percentage of matches that were validated by PROSAC
         match_score = (inliers_count / len(good_matches)) * 100
     else:
         rep_rate, match_score = 0.0, 0.0
     
-    return rep_rate, match_score
+    return rep_rate, match_score, distinct_score # Return 3 values
 # --- UI LOGIC ---
 
 with st.sidebar:
@@ -520,9 +523,9 @@ else:
         dens_enh = len(kp_enh)
         
         # Calculate REAL Repeatability & Matching
-        rep_rate_sift, match_score_sift = calculate_real_metrics_live(image, kp_sift, desc_sift, run_sift)
-        rep_rate_std, match_score_std = calculate_real_metrics_live(image, kp_std, desc_std, run_standard_csift)
-        rep_rate_enh, match_score_enh = calculate_real_metrics_live(image, kp_enh, desc_enh, run_enhanced_csift)
+        rep_rate_sift, match_score_sift, dist_sift = calculate_real_metrics_live(image, kp_sift, desc_sift, run_sift)
+        rep_rate_std, match_score_std, dist_std = calculate_real_metrics_live(image, kp_std, desc_std, run_standard_csift)
+        rep_rate_enh, match_score_enh, dist_enh = calculate_real_metrics_live(image, kp_enh, desc_enh, run_enhanced_csift)
         
         st.markdown("---")
         
@@ -548,6 +551,8 @@ else:
                 <div class='metric-separator'></div>
                 <div class='metric-label'>Matching Score</div>
                 <div class='metric-value'>{match_score_sift:.1f}%</div>
+                <div class='metric-label'>Distinctiveness Score</div>
+                <div class='metric-value'>{dist_sift:.2f}%</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -570,6 +575,8 @@ else:
                 <div class='metric-separator'></div>
                 <div class='metric-label'>Matching Score</div>
                 <div class='metric-value'>{match_score_std:.1f}%</div>
+                <div class='metric-label'>Distinctiveness Score</div>
+                <div class='metric-value'>{dist_enh:.2f}%</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -592,6 +599,8 @@ else:
                 <div class='metric-separator'></div>
                 <div class='metric-label'>Matching Score</div>
                 <div class='metric-value'>{match_score_enh:.1f}%</div>
+                <div class='metric-label'>Distinctiveness Score</div>
+                <div class='metric-value'>{dist_std:.2f}%</div>
             </div>
             """, unsafe_allow_html=True)
 
