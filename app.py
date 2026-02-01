@@ -180,8 +180,7 @@ class CSIFT_Algorithms:
     def preprocess_image(image):
 
         # 1. Resolution normalization for controlled computational evaluation.
-        resized = cv2.resize(image, (600, 600))
-        processed = cv2.GaussianBlur(resized, (5, 5), 0)
+        processed = cv2.resize(image, (600, 600))
         
         return processed
 
