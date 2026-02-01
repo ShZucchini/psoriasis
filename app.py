@@ -189,7 +189,7 @@ class CSIFT_Algorithms:
     def rgb_to_invariant_iterative(image):
         """STANDARD ALGORITHM (SOP 1 - PROBLEM)"""
         rows, cols, _ = image.shape
-        invariant = np.zeros((rows, cols), dtype=np.float64)
+        invariant = np.zeros((rows, cols), dtype=np.float32)
         for i in range(rows):
             for j in range(cols):
                 r, g, b = image[i, j]
@@ -199,7 +199,7 @@ class CSIFT_Algorithms:
     @staticmethod
     def rgb_to_invariant_vectorized(image):
         """ENHANCED ALGORITHM (SOP 1 - SOLUTION)"""
-        img_float = image.astype(np.float64)
+        img_float = image.astype(np.float32)
         M = np.array([[0.299, 0.587, 0.114]])
         invariant = cv2.transform(img_float, M)
         
