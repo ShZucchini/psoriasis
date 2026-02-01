@@ -332,15 +332,9 @@ def run_standard_csift(image):
     
     start_time = time.time()
     
-    h, w, c = image.shape
-    scale = 1.0
-    if h > 300: 
-        scale = 300/h
-        img_small = cv2.resize(image, (0,0), fx=scale, fy=scale)
-    else:
-        img_small = image
+    #clean_image = CSIFT_Algorithms.preprocess_image(image)
         
-    gray_small = CSIFT_Algorithms.rgb_to_invariant_iterative(img_small)
+    gray_small = CSIFT_Algorithms.rgb_to_invariant_iterative(image)
     gray = cv2.resize(gray_small, (w, h)) 
     
     sift_standard = cv2.SIFT_create(nfeatures=800, contrastThreshold=0.04)
@@ -362,12 +356,12 @@ def run_enhanced_csift(image):
     
     start_time = time.time()
     
-    clean_image = CSIFT_Algorithms.preprocess_image(image)
+    #clean_image = CSIFT_Algorithms.preprocess_image(image)
     
-    invariant_img = CSIFT_Algorithms.rgb_to_invariant_vectorized(clean_image)
+    invariant_img = CSIFT_Algorithms.rgb_to_invariant_vectorized(image)
     if len(invariant_img.shape) == 3: invariant_img = invariant_img[:,:,0]
     
-    keypoints = CSIFT_Algorithms.texture_aware_detection(invariant_img, clean_image)
+    keypoints = CSIFT_Algorithms.texture_aware_detection(invariant_img, image)
     
     sift = cv2.SIFT_create()
     _, descriptors = sift.compute(invariant_img, keypoints)
