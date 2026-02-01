@@ -31,6 +31,18 @@ def run_batch_test(folder_path):
         image = cv2.resize(image_raw, (target_width, int(h * scale)))
 
         # --- 1. DEFINE DETECTOR WRAPPERS (Mirrors app.py) ---
+
+        def run_sift(img):
+            gc.collect()
+            tracemalloc.start()
+            start = time.time()
+            gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+            sift = cv2.SIFT_create()
+            k, d = sift.detectAndCompute(gray, None)
+            t = (time.time() - start) * 1000
+            _, peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+            return k, d, t, (peak / (1024 * 1024))
         
         def run_standard(img):
             gc.collect()
@@ -62,43 +74,44 @@ def run_batch_test(folder_path):
             return kp, desc_root, t, (peak / (1024 * 1024))
 
         # --- 2. EXECUTE AND CALCULATE METRICS ---
+        kp_sift, ds_sift, t_sift, m_sift = run_sift(image)
         kp_std, ds_std, t_std, m_std = run_standard(image)
         kp_enh, ds_enh, t_enh, m_enh = run_enhanced(image)
 
         # Import the exact metric calculator from your app.py logic
         from app import calculate_real_metrics_live
+        rep_sift, match_sift = calculate_real_metrics_live(image, kp_sift, ds_sift, run_sift)
         rep_std, match_std = calculate_real_metrics_live(image, kp_std, ds_std, run_standard)
         rep_enh, match_enh = calculate_real_metrics_live(image, kp_enh, ds_enh, run_enhanced)
         
         results.append({
             "Filename": filename,
-            "Std_Time_ms": round(t_std, 2),
-            "Enh_Time_ms": round(t_enh, 2),
-            "Std_Mem_MB": round(m_std, 2),
-            "Enh_Mem_MB": round(m_enh, 2),
-            "Std_Density": len(kp_std),
-            "Enh_Density": len(kp_enh),
-            "Std_Repeatability_%": round(rep_std, 2),
-            "Enh_Repeatability_%": round(rep_enh, 2),
-            "Std_MatchingScore_%": round(match_std, 2),
-            "Enh_MatchingScore_%": round(match_enh, 2)
+            "SIFT_Time_ms": round(t_sift, 2), "Std_Time_ms": round(t_std, 2), "Enh_Time_ms": round(t_enh, 2),
+            "SIFT_Mem_MB": round(m_sift, 2), "Std_Mem_MB": round(m_std, 2), "Enh_Mem_MB": round(m_enh, 2),
+            "SIFT_Density": len(kp_sift), "Std_Density": len(kp_std), "Enh_Density": len(kp_enh),
+            "SIFT_Rep_%": round(rep_sift, 2), "Std_Rep_%": round(rep_std, 2), "Enh_Rep_%": round(rep_enh, 2),
+            "SIFT_Match_%": round(match_sift, 2), "Std_Match_%": round(match_std, 2), "Enh_Match_%": round(match_enh, 2)
         })
 
     # --- 3. FINAL SUMMARY TABLEv8
     if results:
         df = pd.DataFrame(results)
-        df.to_csv("Thesis_Batch_FinalResults.csv", index=False)
+        df.to_csv("ThreeAlgo_Batch_Results.csv", index=False)
         
-        print(f"\n✅ Analysis Complete! Results saved to 'Thesis_Batch_FinalResults.csv'")
-        print("="*65)
-        print(f"{'METRIC':<25} | {'STANDARD':<15} | {'ENHANCED':<15}")
-        print("-"*65)
-        print(f"{'Avg Execution Time':<25} | {df['Std_Time_ms'].mean():>9.2f} ms | {df['Enh_Time_ms'].mean():>9.2f} ms")
-        print(f"{'Avg Memory Usage':<25} | {df['Std_Mem_MB'].mean():>9.2f} MB | {df['Enh_Mem_MB'].mean():>9.2f} MB")
-        print(f"{'Avg Keypoint Density':<25} | {df['Std_Density'].mean():>12.0f} | {df['Enh_Density'].mean():>12.0f}")
-        print(f"{'Avg Repeatability Rate':<25} | {df['Std_Repeatability_%'].mean():>9.2f} %  | {df['Enh_Repeatability_%'].mean():>9.2f} %")
-        print(f"{'Avg Matching Score':<25} | {df['Std_MatchingScore_%'].mean():>9.2f} %  | {df['Enh_MatchingScore_%'].mean():>9.2f} %")
-        print("="*65)
+        print(f"\n✅ Analysis Complete! Results saved to 'ThreeAlgo_Batch_Results.csv'")
+        print("="*85)
+        print(f"{'METRIC':<25} | {'SIFT':<15} | {'STANDARD':<15} | {'ENHANCED':<15}")
+        print("-"*85)
+        metrics = [
+            ('Avg Time (ms)', 'Time_ms'),
+            ('Avg Memory (MB)', 'Mem_MB'),
+            ('Avg Density', 'Density'),
+            ('Avg Repeatability %', 'Rep_%'),
+            ('Avg Matching Score %', 'Match_%')
+        ]
+        for label, key in metrics:
+            print(f"{label:<25} | {df['SIFT_'+key].mean():>12.2f}  | {df['Std_'+key].mean():>12.2f}  | {df['Enh_'+key].mean():>12.2f}")
+        print("="*85)
 
 if __name__ == "__main__":
     run_batch_test("newdataset")
