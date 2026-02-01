@@ -87,9 +87,9 @@ def run_batch_test(folder_path):
     # --- 3. FINAL SUMMARY TABLEv8
     if results:
         df = pd.DataFrame(results)
-        df.to_csv("Thesis_Batch_Results_2.csv", index=False)
+        df.to_csv("Thesis_Batch_FinalResults.csv", index=False)
         
-        print(f"\n✅ Analysis Complete! Results saved to 'Thesis_Batch_Results.csv'")
+        print(f"\n✅ Analysis Complete! Results saved to 'Thesis_Batch_FinalResults.csv'")
         print("="*65)
         print(f"{'METRIC':<25} | {'STANDARD':<15} | {'ENHANCED':<15}")
         print("-"*65)
