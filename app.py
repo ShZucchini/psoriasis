@@ -178,21 +178,10 @@ class CSIFT_Algorithms:
     
     @staticmethod
     def preprocess_image(image):
-        """
-        Standardizes the image before analysis to ensure consistency.
-        1. Hair Removal (Morphological Closing)
-        2. Noise Reduction (Gaussian Blur)
-        """
-        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        
-        # 1. Digital Hair Removal (Fast Version)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (17, 17))
-        blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, kernel)
-        _, thresh = cv2.threshold(blackhat, 10, 255, cv2.THRESH_BINARY)
-        inpainted = cv2.inpaint(image, thresh, 1, cv2.INPAINT_TELEA)
-        
-        # 2. Mild Blur to kill sensor noise
-        processed = cv2.GaussianBlur(inpainted, (5, 5), 0)
+
+        # 1. FORCE RESIZE to 600x600 for consistency & blur
+        resized = cv2.resize(image, (600, 600))
+        processed = cv2.GaussianBlur(resized, (5, 5), 0)
         
         return processed
 
@@ -236,7 +225,7 @@ class CSIFT_Algorithms:
         return mask
 
     @staticmethod
-    def fast_nms(keypoints, radius=4):
+    def fast_nms(keypoints, radius=6):
         """Spatial NMS."""
         if not keypoints: return []
         keypoints = sorted(keypoints, key=lambda x: x.response, reverse=True)
@@ -310,10 +299,13 @@ def run_sift(image):
     
     start_time = time.time()
     
-    # Standard Grayscale conversion
-    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    # 1. Standardize to 600x600
+    clean_image = CSIFT_Algorithms.preprocess_image(image)
     
-    # Standard SIFT
+    # 2. Standard Grayscale conversion
+    gray = cv2.cvtColor(clean_image, cv2.COLOR_RGB2GRAY)
+    
+    # 3. Standard SIFT
     sift = cv2.SIFT_create()
     keypoints, descriptors = sift.detectAndCompute(gray, None)
     
@@ -329,19 +321,19 @@ def run_sift(image):
 def run_standard_csift(image):
     gc.collect()
     tracemalloc.start()
-    
     start_time = time.time()
     
-    #clean_image = CSIFT_Algorithms.preprocess_image(image)
+    # 1. Standardize to 600x600 (Resize Only)
+    clean_image = CSIFT_Algorithms.preprocess_image(image)
         
-    gray_small = CSIFT_Algorithms.rgb_to_invariant_iterative(image)
-    gray = cv2.resize(gray_small, (w, h)) 
+    # 2. SOP 1: Standard (Iterative)
+    gray = CSIFT_Algorithms.rgb_to_invariant_iterative(clean_image)
     
     sift_standard = cv2.SIFT_create(nfeatures=800, contrastThreshold=0.04)
     keypoints, descriptors = sift_standard.detectAndCompute(gray, None)
     
     exec_time = (time.time() - start_time) * 1000 
-    if scale < 1.0: exec_time = exec_time * (1.0 / (scale * scale))
+    # REMOVED: scale logic to keep metrics strictly based on the 600x600 process
     
     current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
@@ -356,12 +348,12 @@ def run_enhanced_csift(image):
     
     start_time = time.time()
     
-    #clean_image = CSIFT_Algorithms.preprocess_image(image)
+    clean_image = CSIFT_Algorithms.preprocess_image(image)
     
-    invariant_img = CSIFT_Algorithms.rgb_to_invariant_vectorized(image)
+    invariant_img = CSIFT_Algorithms.rgb_to_invariant_vectorized(clean_image)
     if len(invariant_img.shape) == 3: invariant_img = invariant_img[:,:,0]
     
-    keypoints = CSIFT_Algorithms.texture_aware_detection(invariant_img, image)
+    keypoints = CSIFT_Algorithms.texture_aware_detection(invariant_img, clean_image)
     
     sift = cv2.SIFT_create()
     _, descriptors = sift.compute(invariant_img, keypoints)
@@ -515,7 +507,7 @@ else:
         # 2. RUN STANDARD CSIFT
         with st.spinner("Executing Standard CSIFT (Iterative)..."):
             kp_std, desc_std, time_std, mem_std = run_standard_csift(image)
-            img_std_viz = cv2.drawKeypoints(image, kp_std, None, color=(160, 160, 160), flags=0)
+            img_std_viz = cv2.drawKeypoints(image, kp_std, None, color=(0, 290, 400), flags=0)
             
         # 3. RUN ENHANCED CSIFT
         with st.spinner("Executing Enhanced CSIFT (Vectorized + Adaptive)..."):
